@@ -1,0 +1,63 @@
+# preparation: find customer who buy most products and their status
+
+create table popular_state as 
+select customer_state, max(buy_num)
+from (
+select  customer_state, product_category_name, count(customer_id) as buy_num
+from delivery_period
+left join customer
+using (customer_id)
+left join order_items_2
+using (order_id)
+left join products
+using (product_id)
+left join product_category_name_translation
+using (product_category_name)
+group by customer.customer_state, product_category_name) as d
+group by customer_state
+order by max(buy_num) desc
+
+# four states are selected
+
+select *
+from (select  customer_state, product_category_name, count(customer_id) as buy_num
+from delivery_period
+left join customer
+using (customer_id)
+left join order_items_2
+using (order_id)
+left join products
+using (product_id)
+left join product_category_name_translation
+using (product_category_name)
+group by customer.customer_state, product_category_name
+)  as state_product_all_num
+right join  popular_state 
+on popular_state.customer_state= state_product_all_num. customer_state
+and max= buy_num
+order by buy_num desc 
+limit 4
+
+
+# cohort analysis: Group of active consumers 
+
+with cohort_sp_assignment as (select customer_unique_id, Date_trunc('month', min(order_purchase_timestamp )):: date as cohort_date  
+							  from delivery_period   left join customer using (customer_id) left join order_items_2 using (order_id) 
+							  left join products using (product_id) where customer_state='SP' and product_category_name='cama_mesa_banho' group by customer_unique_id),
+cohort_sp_month as ( select cohort_date, 'month'||':'||extract ( month from age(order_purchase_timestamp, cohort_date))+  
+					12*extract (year from age(order_purchase_timestamp, cohort_date))  as relative_sp_period,   
+					count(distinct(customer_unique_id))  as active_sp_customers     
+					from delivery_period   left join customer using (customer_id)  
+					join cohort_sp_assignment   using (customer_unique_id)          
+					left join order_items_2      using (order_id)       left join products       using (product_id) 
+					where customer_state='SP' and product_category_name='cama_mesa_banho'
+					group by cohort_date, relative_sp_period),
+cohort_sp_totals as ( select cohort_date, count(customer_unique_id) as cohort_total from cohort_sp_assignment group by cohort_date),
+cohort_sp_month_portion as (select cohort_date, relative_sp_period, active_sp_customers::numeric/cohort_total  as active_sp_portion    
+							from cohort_sp_month join cohort_sp_totals using (cohort_date))
+select cohort_date as row_id, relative_sp_period :: Text as col_id, active_sp_portion as val
+from cohort_sp_month_portion
+union all
+select cohort_date as row_id, 'total' :: Text as col_id, cohort_total as val
+from cohort_sp_totals;
+
